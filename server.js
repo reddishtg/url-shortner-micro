@@ -8,6 +8,9 @@
 var fs = require('fs');
 var express = require('express');
 var app = express();
+var mongo = require('mongodb').MongoClient;
+
+app.enable('trust proxy');
 
 if (!process.env.DISABLE_XORIGIN) {
   app.use(function(req, res, next) {
@@ -22,6 +25,7 @@ if (!process.env.DISABLE_XORIGIN) {
   });
 }
 
+
 app.use('/public', express.static(process.cwd() + '/public'));
 
 app.route('/_api/package.json')
@@ -35,8 +39,81 @@ app.route('/_api/package.json')
   
 app.route('/')
     .get(function(req, res) {
-		  res.sendFile(process.cwd() + '/views/index.html');
+		  res.sendFile(process.cwd() + '/views/index.html');  
     })
+
+app.get('/:protocol//:url', function(req, res){
+  console.log(req.get('host'));
+  if(req.params.url.includes('.') && (req.params.protocol.includes('http:') || req.params.protocol.includes('https:'))){
+       mongo.connect('mongodb://' + process.env.DB_USER + ':' + process.env.DB_PASS + '@ds121665.mlab.com:21665/glitch', function(err, db){
+          if(err) throw err;
+          var links = db.collection('links');
+         
+         //check to see if url is already present
+         links.findOne({original_url: req.params.protocol + '//' + req.params.url}, function(err, data){
+            if(data === null){         
+         links.find().sort({url_id: -1}).limit(1)
+         .toArray(function(err, data){
+           var max = +(data[0].url_id);
+           console.log(max);
+           var obj = {
+             url_id: max + 1,
+             original_url: req.params.protocol + '//' + req.params.url,
+             short_url: req.protocol + '://' + req.get('host') + '/' + (max + 1)
+           }
+
+           links.insertOne(obj)
+
+           delete obj.url_id;
+           delete obj._id;
+           db.close();
+           res.end(JSON.stringify(obj));
+         });
+         }
+           else{
+             delete data.url_id;
+             delete data._id;
+             db.close();
+             res.end(JSON.stringify(data));
+           }
+                       })
+       });
+  }
+  else{
+		  res.sendFile(process.cwd() + '/views/invalid.html');  
+  }
+})
+
+// app.get('*', function(req, res){
+//   console.log(req)
+// })
+
+app.get('/:id', function(req, res){
+   mongo.connect('mongodb://' + process.env.DB_USER + ':' + process.env.DB_PASS + '@ds121665.mlab.com:21665/glitch', function(err, db){
+    if(err) throw err;
+    var links = db.collection('links');
+     // console.log(req)
+     var id = req.params.id;
+     // console.log(id)
+     // URL redirect if shortened
+     if(!isNaN(id)){
+      links.findOne({url_id: +id},
+                    {fields: {
+                    original_url: 1
+                   }}, function(err, doc){
+        if(err) throw err;
+
+        res.writeHead(302, {location:doc.original_url});
+        res.end();
+      })
+     }
+     else{
+		  res.sendFile(process.cwd() + '/views/invalid.html');  
+     }
+
+    db.close();
+   })
+})
 
 // Respond not found to all the wrong routes
 app.use(function(req, res, next){
